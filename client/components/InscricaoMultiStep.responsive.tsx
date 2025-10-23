@@ -574,10 +574,10 @@ const InscricaoMultiStep: React.FC = () => {
       default:
         return <div>Step {step + 1} content</div>;
     }
-    );
   };
 
   // Main component return
+  
   return (
     <Box sx={{ width: '100%', p: isMobile ? 1 : 3 }}>
       <Paper elevation={3} sx={{ p: isMobile ? 2 : 4, borderRadius: 2 }}>
