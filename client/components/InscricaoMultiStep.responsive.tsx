@@ -1,4 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import useDateInput from '../hooks/useDateInput';
+import { CheckCircle as CheckCircleIcon } from '@mui/icons-material';
+import { jsPDF } from 'jspdf';
+import 'jspdf-autotable';
+import QRCode from 'qrcode';
+import { format, parseISO } from 'date-fns';
+import { pt } from 'date-fns/locale';
 import {
   Box,
   Paper,
@@ -20,8 +27,16 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import QRCode from 'qrcode';
-import { jsPDF } from 'jspdf';
+
+// Extend jsPDF with autoTable
+declare module 'jspdf' {
+  interface jsPDF {
+    autoTable: (options: any) => jsPDF;
+    lastAutoTable: {
+      finalY: number;
+    };
+  }
+}
 
 interface FormData {
   fullName: string;
@@ -57,9 +72,14 @@ const COUNTRIES = ['Angola', 'Portugal', 'Brasil', 'Moçambique', 'Cabo Verde', 
 const MARITAL_STATUSES = ['Solteiro(a)', 'Casado(a)', 'Divorciado(a)', 'Viúvo(a)', 'União de Fato'];
 
 const InscricaoMultiStep: React.FC = () => {
+  // Theme and responsive
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  
+  // Stepper state
   const [activeStep, setActiveStep] = useState(0);
+  
+  // Form data state
   const [formData, setFormData] = useState<FormData>({
     fullName: '',
     biNumber: '',
@@ -80,6 +100,26 @@ const InscricaoMultiStep: React.FC = () => {
     registrationNumber: `REG-${Date.now()}`,
   });
 
+  // Date input hook
+  const {
+    date: birthDate,
+    day: birthDay,
+    month: birthMonth,
+    year: birthYear,
+    setDay: setBirthDay,
+    setMonth: setBirthMonth,
+    setYear: setBirthYear,
+  } = useDateInput('');
+
+  // Update formData when birthDate changes
+  useEffect(() => {
+    setFormData(prev => ({
+      ...prev,
+      birthDate: birthDate
+    }));
+  }, [birthDate]);
+
+  // Documents state
   const [documents, setDocuments] = useState<DocumentFiles>({
     secondaryCertificate: null,
     identification: null,
@@ -87,9 +127,13 @@ const InscricaoMultiStep: React.FC = () => {
     paymentProof: null,
   });
 
+  // Form errors state
   const [errors, setErrors] = useState<FormErrors>({});
+  
+  // Success dialog state
   const [successDialogOpen, setSuccessDialogOpen] = useState(false);
 
+  // Steps for the stepper
   const steps = [
     'Informações Pessoais',
     'Origem e Formação',
@@ -137,12 +181,12 @@ const InscricaoMultiStep: React.FC = () => {
       if (!documents.photo) newErrors.photo = 'Foto obrigatória';
       if (!documents.paymentProof) newErrors.paymentProof = 'Comprovativo obrigatório';
     }
-
+    
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
@@ -150,10 +194,10 @@ const InscricaoMultiStep: React.FC = () => {
     }));
     
     // Clear error when user types
-    if (errors[name]) {
+    if (errors[name as keyof FormErrors]) {
       setErrors(prev => {
         const newErrors = { ...prev };
-        delete newErrors[name];
+        delete newErrors[name as keyof FormErrors];
         return newErrors;
       });
     }
@@ -205,6 +249,142 @@ const InscricaoMultiStep: React.FC = () => {
     setActiveStep(prev => prev - 1);
   };
 
+  const generatePDF = useCallback(async () => {
+    try {
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      
+      // Add background color
+      doc.setFillColor(240, 240, 240);
+      doc.rect(0, 0, pageWidth, pageHeight, 'F');
+      
+      // Add header with logo and title
+      doc.setFillColor(30, 58, 138);
+      doc.rect(0, 0, pageWidth, 60, 'F');
+      
+      // Add title
+      doc.setFontSize(24);
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.text('COMPROVATIVO DE INSCRIÇÃO', pageWidth / 2, 35, { align: 'center' as any });
+      
+      // Add current date
+      const currentDate = format(new Date(), "dd 'de' MMMM 'de' yyyy", { locale: pt });
+      doc.setFontSize(10);
+      doc.text(`Emitido em: ${currentDate}`, pageWidth - 15, 20, { align: 'right' as any });
+      
+      // Add registration number
+      doc.setFontSize(12);
+      doc.text(`Nº de Inscrição: ${formData.registrationNumber}`, 20, 80);
+      
+      // Add personal information section
+      doc.setFillColor(220, 220, 220);
+      doc.rect(20, 90, pageWidth - 40, 15, 'F');
+      doc.setFontSize(14);
+      doc.setTextColor(0, 0, 0);
+      doc.setFont('helvetica', 'bold');
+      doc.text('DADOS PESSOAIS', 25, 101);
+      
+      // Add personal information table
+      const personalData = [
+        ['Nome Completo', formData.fullName],
+        ['BI/Passaporte', formData.biNumber],
+        ['Data de Nascimento', formData.birthDate ? format(parseISO(formData.birthDate), "dd 'de' MMMM 'de' yyyy", { locale: pt }) : ''],
+        ['Estado Civil', formData.maritalStatus],
+        ['Nacionalidade', formData.nationality],
+        ['Endereço', formData.address],
+        ['Telefone', formData.phone],
+        ['Email', formData.email]
+      ];
+      
+      (doc as any).autoTable({
+        startY: 110,
+        head: [['Campo', 'Informação']],
+        body: personalData,
+        theme: 'grid',
+        headStyles: {
+          fillColor: [30, 58, 138],
+          textColor: 255,
+          fontStyle: 'bold'
+        },
+        styles: {
+          cellPadding: 5,
+          fontSize: 10,
+          valign: 'middle'
+        },
+        columnStyles: {
+          0: { cellWidth: 60, fontStyle: 'bold' },
+          1: { cellWidth: 'auto' }
+        },
+        margin: { left: 20, right: 20 }
+      });
+      
+      // Add course information
+      doc.setFillColor(220, 220, 220);
+      doc.rect(20, (doc as any).lastAutoTable.finalY + 10, pageWidth - 40, 15, 'F');
+      doc.setFontSize(14);
+      doc.text('CURSOS SELECIONADOS', 25, (doc as any).lastAutoTable.finalY + 21);
+      
+      const courseData = [
+        ['1ª Opção', formData.course1, formData.course1Regime],
+        ['2ª Opção', formData.course2, formData.course2Regime]
+      ];
+      
+      (doc as any).autoTable({
+        startY: (doc as any).lastAutoTable.finalY + 30,
+        head: [['', 'Curso', 'Regime']],
+        body: courseData,
+        theme: 'grid',
+        headStyles: {
+          fillColor: [30, 58, 138],
+          textColor: 255,
+          fontStyle: 'bold'
+        },
+        styles: {
+          cellPadding: 5,
+          fontSize: 10,
+          valign: 'middle',
+          textColor: [0, 0, 0]
+        },
+        columnStyles: {
+          0: { cellWidth: 30 },
+          1: { cellWidth: 'auto' },
+          2: { cellWidth: 40 }
+        },
+        margin: { left: 20, right: 20 }
+      });
+      
+      // Add QR code with registration number
+      const qrCodeData = await QRCode.toDataURL(formData.registrationNumber || '');
+      doc.addImage(qrCodeData, 'PNG', pageWidth - 60, (doc as any).lastAutoTable.finalY + 20, 40, 40);
+      
+      // Add footer
+      doc.setFontSize(8);
+      doc.setTextColor(100, 100, 100);
+      doc.text('Este é um documento gerado automaticamente. Por favor, apresente este comprovativo no dia do exame.', 
+              pageWidth / 2, pageHeight - 10, { align: 'center' as any });
+      
+      // Add page border
+      doc.setDrawColor(200, 200, 200);
+      doc.rect(10, 10, pageWidth - 20, pageHeight - 20);
+      
+      // Save the PDF
+      doc.save(`comprovativo-${formData.registrationNumber}.pdf`);
+      
+    } catch (error) {
+      console.error('Erro ao gerar PDF:', error);
+      alert('Ocorreu um erro ao gerar o comprovativo. Por favor, tente novamente.');
+    }
+  }, [formData]);
+
+  // Generate PDF when success dialog opens
+  useEffect(() => {
+    if (successDialogOpen) {
+      generatePDF();
+    }
+  }, [successDialogOpen, generatePDF]);
+
   const handleFinish = () => {
     if (validateStep(activeStep)) {
       setSuccessDialogOpen(true);
@@ -214,6 +394,11 @@ const InscricaoMultiStep: React.FC = () => {
   };
 
   const handleResetForm = () => {
+    // Reset date inputs
+    setBirthDay('');
+    setBirthMonth('');
+    setBirthYear('');
+    
     setFormData({
       fullName: '',
       biNumber: '',
@@ -283,19 +468,87 @@ const InscricaoMultiStep: React.FC = () => {
               sx={formFieldSx}
               size={isMobile ? 'small' : 'medium'}
             />
-            <TextField
-              fullWidth
-              label="Data de Nascimento"
-              name="birthDate"
-              type="date"
-              value={formData.birthDate}
-              onChange={handleInputChange}
-              error={!!errors.birthDate}
-              helperText={errors.birthDate}
-              variant="outlined"
-              sx={formFieldSx}
-              size={isMobile ? 'small' : 'medium'}
-            />
+            <Box sx={{ mb: errors.birthDate ? 0 : 2 }}>
+              <Typography variant="caption" color="textSecondary" display="block" gutterBottom>
+                Data de Nascimento
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 2, flexDirection: isMobile ? 'column' : 'row' }}>
+                <TextField
+                  fullWidth
+                  label="Dia"
+                  name="birthDay"
+                  type="number"
+                  value={birthDay}
+                  onChange={(e) => setBirthDay(e.target.value)}
+                  onBlur={() => {
+                    if (birthDay && birthMonth && birthYear) {
+                      const newDate = `${birthYear}-${birthMonth}-${birthDay.padStart(2, '0')}`;
+                      setFormData(prev => ({
+                        ...prev,
+                        birthDate: newDate
+                      }));
+                    }
+                  }}
+                  inputProps={{ min: 1, max: 31 }}
+                  variant="outlined"
+                  sx={{ flex: 1 }}
+                  size={isMobile ? 'small' : 'medium'}
+                  error={!!errors.birthDate}
+                />
+                <FormControl fullWidth sx={{ flex: 1 }} error={!!errors.birthDate}>
+                  <InputLabel>Mês</InputLabel>
+                  <Select
+                    name="birthMonth"
+                    value={birthMonth}
+                    onChange={(e) => setBirthMonth(e.target.value)}
+                    onBlur={() => {
+                      if (birthDay && birthMonth && birthYear) {
+                        const newDate = `${birthYear}-${birthMonth}-${birthDay.padStart(2, '0')}`;
+                        setFormData(prev => ({
+                          ...prev,
+                          birthDate: newDate
+                        }));
+                      }
+                    }}
+                    label="Mês"
+                  >
+                    <MenuItem value=""><em>Selecione</em></MenuItem>
+                    {Array.from({length: 12}, (_, i) => i + 1).map(month => (
+                      <MenuItem key={month} value={month.toString().padStart(2, '0')}>
+                        {new Date(2000, month - 1, 1).toLocaleString('pt-AO', { month: 'long' })}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <TextField
+                  fullWidth
+                  label="Ano"
+                  name="birthYear"
+                  type="number"
+                  value={birthYear}
+                  onChange={(e) => setBirthYear(e.target.value)}
+                  onBlur={() => {
+                    if (birthDay && birthMonth && birthYear) {
+                      const newDate = `${birthYear}-${birthMonth}-${birthDay.padStart(2, '0')}`;
+                      setFormData(prev => ({
+                        ...prev,
+                        birthDate: newDate
+                      }));
+                    }
+                  }}
+                  inputProps={{ min: 1900, max: new Date().getFullYear() }}
+                  variant="outlined"
+                  sx={{ flex: 1 }}
+                  size={isMobile ? 'small' : 'medium'}
+                  error={!!errors.birthDate}
+                />
+              </Box>
+              {errors.birthDate && (
+                <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                  {errors.birthDate}
+                </Typography>
+              )}
+            </Box>
             <FormControl fullWidth error={!!errors.maritalStatus} sx={{ ...formFieldSx }} size={isMobile ? 'small' : 'medium'}>
               <InputLabel>Estado Civil</InputLabel>
               <Select
@@ -311,407 +564,24 @@ const InscricaoMultiStep: React.FC = () => {
                 ))}
               </Select>
               {errors.maritalStatus && (
-                <Typography variant="caption" color="error">
+                <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
                   {errors.maritalStatus}
                 </Typography>
               )}
             </FormControl>
-            <TextField
-              fullWidth
-              label="Email"
-              name="email"
-              type="email"
-              value={formData.email}
-              onChange={handleInputChange}
-              error={!!errors.email}
-              helperText={errors.email}
-              variant="outlined"
-              sx={formFieldSx}
-              size={isMobile ? 'small' : 'medium'}
-            />
-          </Box>
-        );
-      case 1:
-        return (
-          <Box sx={{ p: isMobile ? 1 : 2 }}>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, fontSize: isMobile ? '1.1rem' : '1.25rem' }}>
-              Origem e Formação
-            </Typography>
-            <FormControl fullWidth error={!!errors.nationality} sx={{ ...formFieldSx }} size={isMobile ? 'small' : 'medium'}>
-              <InputLabel>Nacionalidade</InputLabel>
-              <Select
-                name="nationality"
-                value={formData.nationality}
-                onChange={handleSelectChange}
-                label="Nacionalidade"
-              >
-                {COUNTRIES.map((country) => (
-                  <MenuItem key={country} value={country}>
-                    {country}
-                  </MenuItem>
-                ))}
-              </Select>
-              {errors.nationality && (
-                <Typography variant="caption" color="error">
-                  {errors.nationality}
-                </Typography>
-              )}
-            </FormControl>
-            <TextField
-              fullWidth
-              label="Endereço"
-              name="address"
-              value={formData.address}
-              onChange={handleInputChange}
-              error={!!errors.address}
-              helperText={errors.address}
-              variant="outlined"
-              sx={formFieldSx}
-              size={isMobile ? 'small' : 'medium'}
-            />
-            <TextField
-              fullWidth
-              label="Telemóvel"
-              name="phone"
-              value={formData.phone}
-              onChange={handleInputChange}
-              error={!!errors.phone}
-              helperText={errors.phone}
-              variant="outlined"
-              sx={formFieldSx}
-              size={isMobile ? 'small' : 'medium'}
-            />
-            <TextField
-              fullWidth
-              label="Escola de Origem"
-              name="school"
-              value={formData.school}
-              onChange={handleInputChange}
-              error={!!errors.school}
-              helperText={errors.school}
-              variant="outlined"
-              sx={formFieldSx}
-              size={isMobile ? 'small' : 'medium'}
-            />
-            <TextField
-              fullWidth
-              label="Habilitação Literária"
-              name="education"
-              value={formData.education}
-              onChange={handleInputChange}
-              error={!!errors.education}
-              helperText={errors.education}
-              variant="outlined"
-              sx={formFieldSx}
-              size={isMobile ? 'small' : 'medium'}
-            />
-            <TextField
-              fullWidth
-              label="Ano de Conclusão"
-              name="yearOfCompletion"
-              type="number"
-              value={formData.yearOfCompletion}
-              onChange={handleInputChange}
-              error={!!errors.yearOfCompletion}
-              helperText={errors.yearOfCompletion}
-              variant="outlined"
-              sx={formFieldSx}
-              size={isMobile ? 'small' : 'medium'}
-              inputProps={{
-                min: 1900,
-                max: new Date().getFullYear(),
-              }}
-            />
-          </Box>
-        );
-      case 2:
-        return (
-          <Box sx={{ p: isMobile ? 1 : 2 }}>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, fontSize: isMobile ? '1.1rem' : '1.25rem' }}>
-              Seleção de Cursos
-            </Typography>
-            
-            <Typography variant="subtitle2" sx={{ mt: 2, mb: 1, fontWeight: 500 }}>
-              1ª Opção de Curso
-            </Typography>
-            <FormControl fullWidth error={!!errors.course1} sx={{ ...formFieldSx }} size={isMobile ? 'small' : 'medium'}>
-              <InputLabel>Curso</InputLabel>
-              <Select
-                name="course1"
-                value={formData.course1}
-                onChange={handleSelectChange}
-                label="Curso"
-              >
-                {COURSES.map((course) => (
-                  <MenuItem key={course} value={course}>
-                    {course}
-                  </MenuItem>
-                ))}
-              </Select>
-              {errors.course1 && (
-                <Typography variant="caption" color="error">
-                  {errors.course1}
-                </Typography>
-              )}
-            </FormControl>
-
-            <FormControl fullWidth error={!!errors.course1Regime} sx={{ ...formFieldSx }} size={isMobile ? 'small' : 'medium'}>
-              <InputLabel>Regime</InputLabel>
-              <Select
-                name="course1Regime"
-                value={formData.course1Regime}
-                onChange={handleSelectChange}
-                label="Regime"
-              >
-                {REGIMES.map((regime) => (
-                  <MenuItem key={regime} value={regime}>
-                    {regime}
-                  </MenuItem>
-                ))}
-              </Select>
-              {errors.course1Regime && (
-                <Typography variant="caption" color="error">
-                  {errors.course1Regime}
-                </Typography>
-              )}
-            </FormControl>
-
-            <Typography variant="subtitle2" sx={{ mt: 3, mb: 1, fontWeight: 500 }}>
-              2ª Opção de Curso
-            </Typography>
-            <FormControl fullWidth error={!!errors.course2} sx={{ ...formFieldSx }} size={isMobile ? 'small' : 'medium'}>
-              <InputLabel>Curso</InputLabel>
-              <Select
-                name="course2"
-                value={formData.course2}
-                onChange={handleSelectChange}
-                label="Curso"
-              >
-                {COURSES.map((course) => (
-                  <MenuItem key={course} value={course}>
-                    {course}
-                  </MenuItem>
-                ))}
-              </Select>
-              {errors.course2 && (
-                <Typography variant="caption" color="error">
-                  {errors.course2}
-                </Typography>
-              )}
-            </FormControl>
-
-            <FormControl fullWidth error={!!errors.course2Regime} sx={{ ...formFieldSx }} size={isMobile ? 'small' : 'medium'}>
-              <InputLabel>Regime</InputLabel>
-              <Select
-                name="course2Regime"
-                value={formData.course2Regime}
-                onChange={handleSelectChange}
-                label="Regime"
-              >
-                {REGIMES.map((regime) => (
-                  <MenuItem key={regime} value={regime}>
-                    {regime}
-                  </MenuItem>
-                ))}
-              </Select>
-              {errors.course2Regime && (
-                <Typography variant="caption" color="error">
-                  {errors.course2Regime}
-                </Typography>
-              )}
-            </FormControl>
-          </Box>
-        );
-      case 3:
-        return (
-          <Box sx={{ p: isMobile ? 1 : 2 }}>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, fontSize: isMobile ? '1.1rem' : '1.25rem' }}>
-              Documentos Necessários
-            </Typography>
-            <Alert severity="info" sx={{ mb: 2, fontSize: isMobile ? '0.8rem' : '0.875rem' }}>
-              Por favor, faça o upload de todos os documentos solicitados.
-            </Alert>
-            
-            {[
-              { id: 'identification', label: 'Bilhete de Identidade/Passaporte', error: errors.identification },
-              { id: 'secondaryCertificate', label: 'Certificado de Habilitações', error: errors.secondaryCertificate },
-              { id: 'photo', label: 'Fotografia Tipo Passe', error: errors.photo },
-              { id: 'paymentProof', label: 'Comprovativo de Pagamento', error: errors.paymentProof },
-            ].map((doc) => (
-              <Box key={doc.id} sx={{ mb: 2 }}>
-                <input
-                  accept="image/*,.pdf"
-                  style={{ display: 'none' }}
-                  id={`${doc.id}-upload`}
-                  type="file"
-                  onChange={(e) => handleDocumentUpload(e, doc.id)}
-                />
-                <label htmlFor={`${doc.id}-upload`}>
-                  <Button
-                    variant="outlined"
-                    component="span"
-                    fullWidth
-                    sx={{
-                      justifyContent: 'flex-start',
-                      textTransform: 'none',
-                      textAlign: 'left',
-                      p: 1.5,
-                      borderStyle: 'dashed',
-                      borderColor: documents[doc.id] ? 'success.main' : 'divider',
-                      '&:hover': {
-                        borderColor: 'primary.main',
-                        backgroundColor: 'action.hover',
-                      },
-                    }}
-                  >
-                    <Box sx={{ textAlign: 'left' }}>
-                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                        {doc.label}
-                      </Typography>
-                      <Typography variant="caption" color="textSecondary">
-                        {documents[doc.id] 
-                          ? `Arquivo: ${documents[doc.id]?.name}` 
-                          : 'Clique para fazer upload'}
-                      </Typography>
-                    </Box>
-                  </Button>
-                </label>
-                {doc.error && (
-                  <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5, ml: 1 }}>
-                    {doc.error}
-                  </Typography>
-                )}
-              </Box>
-            ))}
-          </Box>
-        );
-      case 4:
-        return (
-          <Box sx={{ p: isMobile ? 1 : 2 }}>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, fontSize: isMobile ? '1.1rem' : '1.25rem' }}>
-              Confirmação
-            </Typography>
-            <Alert severity="success" sx={{ mb: 3 }}>
-              Por favor, confirme que todas as informações estão corretas antes de enviar.
-            </Alert>
-            
-            <Box sx={{ 
-              p: 2, 
-              backgroundColor: 'background.paper', 
-              borderRadius: 1,
-              border: '1px solid',
-              borderColor: 'divider',
-            }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: 'primary.main' }}>
-                Dados Pessoais
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1.5 }}>
-                <strong>Nome:</strong> {formData.fullName}<br />
-                <strong>BI/Passaporte:</strong> {formData.biNumber}<br />
-                <strong>Data de Nascimento:</strong> {formData.birthDate}<br />
-                <strong>Estado Civil:</strong> {formData.maritalStatus}<br />
-                <strong>Nacionalidade:</strong> {formData.nationality}<br />
-                <strong>Endereço:</strong> {formData.address}<br />
-                <strong>Telefone:</strong> {formData.phone}<br />
-                <strong>Email:</strong> {formData.email}<br />
-              </Typography>
-              
-              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, mt: 2, color: 'primary.main' }}>
-                Formação Académica
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1.5 }}>
-                <strong>Escola:</strong> {formData.school}<br />
-                <strong>Habilitação:</strong> {formData.education}<br />
-                <strong>Ano de Conclusão:</strong> {formData.yearOfCompletion}<br />
-              </Typography>
-              
-              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, mt: 2, color: 'primary.main' }}>
-                Opções de Curso
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                <strong>1ª Opção:</strong> {formData.course1} ({formData.course1Regime})
-              </Typography>
-              <Typography variant="body2">
-                <strong>2ª Opção:</strong> {formData.course2} ({formData.course2Regime})
-              </Typography>
-            </Box>
-            
-            <Alert severity="info" sx={{ mt: 3, fontSize: '0.85rem' }}>
-              Ao confirmar, você concorda com os termos e condições do processo de inscrição.
-            </Alert>
           </Box>
         );
       default:
-        return <div>Step {step + 1}</div>;
+        return <div>Step {step + 1} content</div>;
     }
+    );
   };
 
+  // Main component return
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        py: { xs: 2, sm: 4 },
-        px: { xs: 1, sm: 2 },
-      }}
-    >
-      <Paper
-        elevation={8}
-        sx={{
-          width: '100%',
-          maxWidth: '900px',
-          mx: 'auto',
-          p: { xs: 2, sm: 3, md: 4 },
-          borderRadius: 3,
-          background: '#fff',
-          overflow: 'hidden',
-        }}
-      >
-        <Typography
-          variant="h4"
-          component="h1"
-          sx={{
-            mb: 1,
-            fontWeight: 700,
-            color: '#333',
-            textAlign: 'center',
-            fontSize: { xs: '1.5rem', sm: '2rem' },
-          }}
-        >
-          Inscrição UAN
-        </Typography>
-        <Typography
-          variant="body2"
-          sx={{
-            mb: 4,
-            textAlign: 'center',
-            color: '#666',
-            fontSize: { xs: '0.85rem', sm: '0.95rem' },
-          }}
-        >
-          Exame de Acesso - Universidade Agostinho Neto
-        </Typography>
-
-        <Stepper 
-          activeStep={activeStep} 
-          orientation={isMobile ? 'vertical' : 'horizontal'}
-          sx={{
-            mb: 4,
-            '& .MuiStepLabel-label': {
-              fontSize: isMobile ? '0.7rem' : '0.8rem',
-              '&.Mui-active, &.Mui-completed': {
-                fontWeight: 600,
-              },
-            },
-            '& .MuiStepConnector-line': {
-              minHeight: isMobile ? 30 : 'auto',
-            },
-          }}
-        >
+    <Box sx={{ width: '100%', p: isMobile ? 1 : 3 }}>
+      <Paper elevation={3} sx={{ p: isMobile ? 2 : 4, borderRadius: 2 }}>
+        <Stepper activeStep={activeStep} orientation={isMobile ? 'vertical' : 'horizontal'} sx={{ mb: 4 }}>
           {steps.map((label) => (
             <Step key={label}>
               <StepLabel>{label}</StepLabel>
@@ -719,159 +589,77 @@ const InscricaoMultiStep: React.FC = () => {
           ))}
         </Stepper>
 
-        <Box 
-          sx={{ 
-            minHeight: { xs: 'auto', sm: '400px' },
-            maxHeight: { xs: '60vh', sm: 'none' },
-            overflowY: 'auto',
-            pr: { xs: 0.5, sm: 1 },
-            '&::-webkit-scrollbar': {
-              width: '6px',
-            },
-            '&::-webkit-scrollbar-track': {
-              background: '#f1f1f1',
-              borderRadius: '10px',
-            },
-            '&::-webkit-scrollbar-thumb': {
-              background: '#888',
-              borderRadius: '10px',
-            },
-            '&::-webkit-scrollbar-thumb:hover': {
-              background: '#555',
-            },
-          }}
-        >
+        <Box sx={{ mt: 2 }}>
           {renderStepContent(activeStep)}
         </Box>
 
-        <Box sx={{ 
-          display: 'flex', 
-          justifyContent: 'space-between',
-          mt: 4,
-          pt: 2,
-          borderTop: '1px solid',
-          borderColor: 'divider',
-        }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 4 }}>
           <Button
             disabled={activeStep === 0}
             onClick={handleBack}
-            variant="outlined"
-            size={isMobile ? 'small' : 'medium'}
-            sx={{ minWidth: 100 }}
+            sx={{ mr: 1 }}
           >
             Voltar
           </Button>
-          <Button
-            variant="contained"
-            onClick={activeStep === steps.length - 1 ? handleFinish : handleNext}
-            size={isMobile ? 'small' : 'medium'}
-            sx={{
-              minWidth: 100,
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              '&:hover': {
-                opacity: 0.9,
-              },
-            }}
-          >
-            {activeStep === steps.length - 1 ? 'Confirmar' : 'Próximo'}
-          </Button>
+          <Box>
+            {activeStep === steps.length - 1 ? (
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleFinish}
+                sx={{ ml: 1 }}
+              >
+                Finalizar
+              </Button>
+            ) : (
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleNext}
+                sx={{ ml: 1 }}
+              >
+                Próximo
+              </Button>
+            )}
+          </Box>
         </Box>
       </Paper>
 
-      <Dialog 
-        open={successDialogOpen} 
-        onClose={() => setSuccessDialogOpen(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle sx={{ textAlign: 'center', pt: 4 }}>
-          <Box sx={{ color: 'success.main', mb: 2 }}>
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM10 17L5 12L6.41 10.59L10 14.17L17.59 6.58L19 8L10 17Z" fill="currentColor"/>
-            </svg>
+      <Dialog open={successDialogOpen} onClose={() => setSuccessDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Inscrição Concluída com Sucesso!</DialogTitle>
+        <DialogContent>
+          <Box display="flex" flexDirection="column" alignItems="center" py={2}>
+            <CheckCircleIcon color="success" sx={{ fontSize: 60, mb: 2 }} />
+            <Typography variant="h6" align="center" gutterBottom>
+              Sua inscrição foi realizada com sucesso!
+            </Typography>
+            <Typography variant="body1" align="center" paragraph>
+              Um e-mail de confirmação foi enviado para {formData.email}.
+            </Typography>
+            <Typography variant="body2" color="textSecondary" align="center">
+              Número de inscrição: {formData.registrationNumber || 'N/A'}
+            </Typography>
           </Box>
-          Inscrição Concluída com Sucesso!
-        </DialogTitle>
-        <DialogContent sx={{ textAlign: 'center', pb: 4 }}>
+        </DialogContent>
+        <DialogActions sx={{ p: 2, justifyContent: 'center' }}>
           <Button 
             variant="contained" 
-            onClick={async () => {
-              try {
-                // Create a new PDF document
-                const doc = new jsPDF();
-                
-                // Add title
-                doc.setFontSize(18);
-                doc.text('Comprovativo de Inscrição', 105, 20, { align: 'center' });
-                
-                // Add registration number
-                doc.setFontSize(12);
-                doc.text(`Número de Inscrição: ${formData.registrationNumber}`, 20, 40);
-                
-                // Add personal information section
-                doc.setFontSize(14);
-                doc.text('Dados Pessoais', 20, 60);
-                doc.setFontSize(10);
-                doc.text(`Nome Completo: ${formData.fullName}`, 20, 70);
-                doc.text(`BI/Passaporte: ${formData.biNumber}`, 20, 78);
-                doc.text(`Data de Nascimento: ${formData.birthDate}`, 20, 86);
-                doc.text(`Estado Civil: ${formData.maritalStatus}`, 20, 94);
-                doc.text(`Nacionalidade: ${formData.nationality}`, 20, 102);
-                doc.text(`Endereço: ${formData.address}`, 20, 110);
-                doc.text(`Telefone: ${formData.phone}`, 20, 118);
-                doc.text(`Email: ${formData.email}`, 20, 126);
-                
-                // Add course information
-                doc.setFontSize(14);
-                doc.text('Cursos Selecionados', 20, 146);
-                doc.setFontSize(10);
-                doc.text(`1ª Opção: ${formData.course1} (${formData.course1Regime})`, 25, 156);
-                doc.text(`2ª Opção: ${formData.course2} (${formData.course2Regime})`, 25, 164);
-                
-                // Add QR code with registration number
-                const qrCodeData = await QRCode.toDataURL(formData.registrationNumber || '');
-                doc.addImage(qrCodeData, 'PNG', 150, 60, 40, 40);
-                
-                // Add footer
-                const pageHeight = doc.internal.pageSize.getHeight();
-                doc.setFontSize(8);
-                doc.text('Este é um documento gerado automaticamente. Por favor, apresente este comprovativo no dia do exame.', 105, pageHeight - 20, { align: 'center' });
-                
-                // Save the PDF
-                doc.save(`comprovativo-${formData.registrationNumber}.pdf`);
-                
-              } catch (error) {
-                console.error('Erro ao gerar PDF:', error);
-                alert('Ocorreu um erro ao gerar o comprovativo. Por favor, tente novamente.');
-              }
-            }}
-            sx={{ mb: 3, background: '#4CAF50', '&:hover': { background: '#388E3C' } }}
-          >
-            Baixar Comprovativo (PDF)
-          </Button>
-          <Typography variant="body1" sx={{ mb: 2, mt: 2 }}>
-            Sua inscrição foi registrada com sucesso no sistema.
-          </Typography>
-          <Typography variant="body2" color="textSecondary">
-            Número de inscrição: <strong>{formData.registrationNumber}</strong>
-          </Typography>
-          <Typography variant="body2" color="textSecondary" sx={{ mb: 3 }}>
-            Um e-mail de confirmação foi enviado para <strong>{formData.email}</strong>
-          </Typography>
-          <Button 
-            variant="contained" 
+            color="primary" 
             onClick={handleResetForm}
-            sx={{
-              mt: 2,
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              '&:hover': {
-                opacity: 0.9,
-              },
-            }}
+            size="large"
           >
             Nova Inscrição
           </Button>
-        </DialogContent>
+          <Button 
+            variant="outlined" 
+            color="primary" 
+            onClick={generatePDF}
+            size="large"
+            sx={{ ml: 2 }}
+          >
+            Baixar Comprovativo
+          </Button>
+        </DialogActions>
       </Dialog>
     </Box>
   );
