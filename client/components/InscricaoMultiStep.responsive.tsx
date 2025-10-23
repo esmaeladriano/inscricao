@@ -100,24 +100,28 @@ const InscricaoMultiStep: React.FC = () => {
     registrationNumber: `REG-${Date.now()}`,
   });
 
-  // Date input hook
-  const {
-    date: birthDate,
-    day: birthDay,
-    month: birthMonth,
-    year: birthYear,
-    setDay: setBirthDay,
-    setMonth: setBirthMonth,
-    setYear: setBirthYear,
-  } = useDateInput('');
+  // Date input state
+  const [birthDay, setBirthDay] = useState('');
+  const [birthMonth, setBirthMonth] = useState('');
+  const [birthYear, setBirthYear] = useState('');
+  
+  // Calculate birthDate string when day/month/year changes
+  const birthDate = birthDay && birthMonth && birthYear 
+    ? `${birthYear}-${birthMonth.padStart(2, '0')}-${birthDay.padStart(2, '0')}`
+    : '';
 
   // Update formData when birthDate changes
   useEffect(() => {
     setFormData(prev => ({
       ...prev,
-      birthDate: birthDate
+      birthDate
     }));
   }, [birthDate]);
+
+  // Calculate birthDate string when day/month/year changes
+  const birthDate = birthDay && birthMonth && birthYear 
+    ? `${birthYear}-${birthMonth.padStart(2, '0')}-${birthDay.padStart(2, '0')}`
+    : '';
 
   // Documents state
   const [documents, setDocuments] = useState<DocumentFiles>({
@@ -430,12 +434,31 @@ const InscricaoMultiStep: React.FC = () => {
   };
 
   const renderStepContent = (step: number) => {
-    const formFieldSx = {
+    const formFieldSx = (fieldName: string, example?: string) => ({
       mb: isMobile ? 1.5 : 2,
       '& .MuiOutlinedInput-root': {
         borderRadius: 2,
+        '&.Mui-focused fieldset': {
+          borderColor: errors[fieldName] ? 'error.main' : 'success.main',
+        },
       },
-    };
+      '& .MuiOutlinedInput-root.Mui-error .MuiOutlinedInput-notchedOutline': {
+        borderColor: 'error.main',
+      },
+      '& .MuiOutlinedInput-root:not(.Mui-error) .MuiOutlinedInput-notchedOutline': {
+        borderColor: formData[fieldName as keyof FormData] && !errors[fieldName] 
+          ? 'success.main' 
+          : 'rgba(0, 0, 0, 0.23)',
+      },
+      '& .MuiFormHelperText-root': {
+        marginLeft: 0,
+        color: errors[fieldName] ? 'error.main' : 'text.secondary',
+      },
+      '& .MuiFormHelperText-contained': {
+        marginLeft: 0,
+        color: errors[fieldName] ? 'error.main' : 'success.main',
+      },
+    });
 
     switch (step) {
       case 0:
@@ -444,104 +467,81 @@ const InscricaoMultiStep: React.FC = () => {
             <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, fontSize: isMobile ? '1.1rem' : '1.25rem' }}>
               Informações Pessoais
             </Typography>
+            
+            {/* Nome Completo */}
             <TextField
               fullWidth
-              label="Nome Completo"
+              label="Nome Completo *"
               name="fullName"
               value={formData.fullName}
               onChange={handleInputChange}
               error={!!errors.fullName}
-              helperText={errors.fullName}
+              helperText={errors.fullName || 'Ex: Maria da Silva Santos'}
               variant="outlined"
-              sx={formFieldSx}
+              sx={formFieldSx('fullName')}
               size={isMobile ? 'small' : 'medium'}
+              FormHelperTextProps={{
+                variant: formData.fullName && !errors.fullName ? 'filled' : 'standard'
+              }}
             />
-            <TextField
-              fullWidth
-              label="BI/Passaporte"
-              name="biNumber"
-              value={formData.biNumber}
-              onChange={handleInputChange}
-              error={!!errors.biNumber}
-              helperText={errors.biNumber}
-              variant="outlined"
-              sx={formFieldSx}
-              size={isMobile ? 'small' : 'medium'}
-            />
-            <Box sx={{ mb: errors.birthDate ? 0 : 2 }}>
-              <Typography variant="caption" color="textSecondary" display="block" gutterBottom>
-                Data de Nascimento
-              </Typography>
+
+            {/* Data de Nascimento */}
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Data de Nascimento *</Typography>
               <Box sx={{ display: 'flex', gap: 2, flexDirection: isMobile ? 'column' : 'row' }}>
-                <TextField
-                  fullWidth
-                  label="Dia"
-                  name="birthDay"
-                  type="number"
-                  value={birthDay}
-                  onChange={(e) => setBirthDay(e.target.value)}
-                  onBlur={() => {
-                    if (birthDay && birthMonth && birthYear) {
-                      const newDate = `${birthYear}-${birthMonth}-${birthDay.padStart(2, '0')}`;
-                      setFormData(prev => ({
-                        ...prev,
-                        birthDate: newDate
-                      }));
-                    }
-                  }}
-                  inputProps={{ min: 1, max: 31 }}
-                  variant="outlined"
-                  sx={{ flex: 1 }}
-                  size={isMobile ? 'small' : 'medium'}
-                  error={!!errors.birthDate}
-                />
-                <FormControl fullWidth sx={{ flex: 1 }} error={!!errors.birthDate}>
-                  <InputLabel>Mês</InputLabel>
+                <FormControl fullWidth>
+                  <InputLabel>Dia</InputLabel>
                   <Select
-                    name="birthMonth"
-                    value={birthMonth}
-                    onChange={(e) => setBirthMonth(e.target.value)}
-                    onBlur={() => {
-                      if (birthDay && birthMonth && birthYear) {
-                        const newDate = `${birthYear}-${birthMonth}-${birthDay.padStart(2, '0')}`;
-                        setFormData(prev => ({
-                          ...prev,
-                          birthDate: newDate
-                        }));
-                      }
-                    }}
-                    label="Mês"
+                    value={birthDay}
+                    onChange={(e) => setBirthDay(e.target.value)}
+                    label="Dia"
+                    size={isMobile ? 'small' : 'medium'}
                   >
-                    <MenuItem value=""><em>Selecione</em></MenuItem>
-                    {Array.from({length: 12}, (_, i) => i + 1).map(month => (
-                      <MenuItem key={month} value={month.toString().padStart(2, '0')}>
-                        {new Date(2000, month - 1, 1).toLocaleString('pt-AO', { month: 'long' })}
+                    <MenuItem value=""><em>Dia</em></MenuItem>
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                      <MenuItem key={day} value={day.toString().padStart(2, '0')}>
+                        {day}
                       </MenuItem>
                     ))}
                   </Select>
                 </FormControl>
-                <TextField
-                  fullWidth
-                  label="Ano"
-                  name="birthYear"
-                  type="number"
-                  value={birthYear}
-                  onChange={(e) => setBirthYear(e.target.value)}
-                  onBlur={() => {
-                    if (birthDay && birthMonth && birthYear) {
-                      const newDate = `${birthYear}-${birthMonth}-${birthDay.padStart(2, '0')}`;
-                      setFormData(prev => ({
-                        ...prev,
-                        birthDate: newDate
-                      }));
-                    }
-                  }}
-                  inputProps={{ min: 1900, max: new Date().getFullYear() }}
-                  variant="outlined"
-                  sx={{ flex: 1 }}
-                  size={isMobile ? 'small' : 'medium'}
-                  error={!!errors.birthDate}
-                />
+
+                <FormControl fullWidth>
+                  <InputLabel>Mês</InputLabel>
+                  <Select
+                    value={birthMonth}
+                    onChange={(e) => setBirthMonth(e.target.value)}
+                    label="Mês"
+                    size={isMobile ? 'small' : 'medium'}
+                  >
+                    <MenuItem value=""><em>Mês</em></MenuItem>
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
+                      <MenuItem key={month} value={month.toString().padStart(2, '0')}>
+                        {new Date(2000, month - 1, 1).toLocaleString('pt-PT', { month: 'long' })}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <FormControl fullWidth>
+                  <InputLabel>Ano</InputLabel>
+                  <Select
+                    value={birthYear}
+                    onChange={(e) => setBirthYear(e.target.value)}
+                    label="Ano"
+                    size={isMobile ? 'small' : 'medium'}
+                  >
+                    <MenuItem value=""><em>Ano</em></MenuItem>
+                    {Array.from({ length: 100 }, (_, i) => {
+                      const year = new Date().getFullYear() - i;
+                      return (
+                        <MenuItem key={year} value={year.toString()}>
+                          {year}
+                        </MenuItem>
+                      );
+                    })}
+                  </Select>
+                </FormControl>
               </Box>
               {errors.birthDate && (
                 <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
@@ -549,14 +549,22 @@ const InscricaoMultiStep: React.FC = () => {
                 </Typography>
               )}
             </Box>
-            <FormControl fullWidth error={!!errors.maritalStatus} sx={{ ...formFieldSx }} size={isMobile ? 'small' : 'medium'}>
-              <InputLabel>Estado Civil</InputLabel>
+
+            {/* Estado Civil */}
+            <FormControl 
+              fullWidth 
+              error={!!errors.maritalStatus}
+              sx={formFieldSx('maritalStatus')}
+            >
+              <InputLabel>Estado Civil *</InputLabel>
               <Select
-                name="maritalStatus"
                 value={formData.maritalStatus}
                 onChange={handleSelectChange}
-                label="Estado Civil"
+                name="maritalStatus"
+                label="Estado Civil *"
+                size={isMobile ? 'small' : 'medium'}
               >
+                <MenuItem value=""><em>Selecione</em></MenuItem>
                 {MARITAL_STATUSES.map((status) => (
                   <MenuItem key={status} value={status}>
                     {status}
@@ -573,7 +581,6 @@ const InscricaoMultiStep: React.FC = () => {
         );
       default:
         return <div>Step {step + 1} content</div>;
-    }
   };
 
   // Main component return
